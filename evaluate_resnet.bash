@@ -1,0 +1,1 @@
+bsub -Is -q gpu -gpu "num=1:j_exclusive=yes:gmem=20G" -R "select[ui==aiml_python && osrel==70 && type==X64LIN]" python evaluate_single.py --coco_path /home/phd_li/dataset/RDD2022/ --batch_size 128 --output_dir ./output_resnet --num_queries 16 --dim_feedforward 512 --enc_layers 4 --dec_layers 4 --no_aux_loss --eval --resume ./output_resnet/checkpoint.pth
