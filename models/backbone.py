@@ -15,6 +15,7 @@ from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
 
+from dinov1_models import dino_vits8
 
 class FrozenBatchNorm2d(torch.nn.Module):
     """
@@ -54,22 +55,44 @@ class FrozenBatchNorm2d(torch.nn.Module):
         bias = b - rm * scale
         return x * scale + bias
 
+class DinoV1Wrapper(nn.Module):
+    def __init__(self, dino):
+        super().__init__()
+        self.encoder = dino
 
+    def forward(self, x):
+        x = self.encoder.prepare_tokens(x)
+        out = OrderedDict()
+        for blk in self.encoder.blocks:
+            x = blk(x)
+        _, N, D = x.shape
+        x = x[:, 1:, :].swapaxes(
+            1, 2).view(-1, D, int(N ** 0.5), int(N ** 0.5))
+        out['0'] = x
+        return out
+    
 class BackboneBase(nn.Module):
 
-    def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool):
+    def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool, is_dino: bool):
         super().__init__()
-        for name, parameter in backbone.named_parameters():
-            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-                parameter.requires_grad_(False)
-        if return_interm_layers:
-            return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+        if not is_dino:
+            ## For Resnet (original)
+            for name, parameter in backbone.named_parameters():
+                if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+                    parameter.requires_grad_(False)
+            if return_interm_layers:
+                return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+            else:
+                return_layers = {'layer4': "0"}
+            self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+            self.num_channels = num_channels
         else:
-            return_layers = {'layer4': "0"}
-        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
-        self.num_channels = num_channels
+            ## For dino
+            self.num_channels = num_channels
+            self.body = DinoV1Wrapper(dino=backbone)
 
     def forward(self, tensor_list: NestedTensor):
+        # xs = self.body(tensor_list.tensors)
         xs = self.body(tensor_list.tensors)
         out: Dict[str, NestedTensor] = {}
         for name, x in xs.items():
@@ -80,18 +103,37 @@ class BackboneBase(nn.Module):
         return out
 
 
+# class Backbone(BackboneBase):
+#     """ResNet backbone with frozen BatchNorm."""
+#     def __init__(self, name: str,
+#                  train_backbone: bool,
+#                  return_interm_layers: bool,
+#                  dilation: bool):
+#         backbone = getattr(torchvision.models, name)(
+#             replace_stride_with_dilation=[False, False, dilation],
+#             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
+#         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+#         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
+
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
     def __init__(self, name: str,
                  train_backbone: bool,
                  return_interm_layers: bool,
-                 dilation: bool):
-        backbone = getattr(torchvision.models, name)(
-            replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
-
+                 dilation: bool, is_dino: bool):
+        if not is_dino:
+            ## For resnet (original)
+            print("Resnet is used...")
+            backbone = getattr(torchvision.models, name)(
+                replace_stride_with_dilation=[False, False, dilation],
+                pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
+            num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+        else:
+            ## For dino
+            print("DINOv1 is used...")
+            backbone = dino_vits8()
+            num_channels = 384
+        super().__init__(backbone, train_backbone, num_channels, return_interm_layers, is_dino)
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
@@ -113,7 +155,7 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, args.dino)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model

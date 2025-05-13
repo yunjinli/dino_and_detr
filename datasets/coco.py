@@ -68,7 +68,8 @@ class ConvertCocoPolysToMask(object):
         boxes[:, 0::2].clamp_(min=0, max=w)
         boxes[:, 1::2].clamp_(min=0, max=h)
 
-        classes = [obj["category_id"] for obj in anno]
+        # classes = [obj["category_id"] for obj in anno]
+        classes = [int(obj["category_id"]) for obj in anno]
         classes = torch.tensor(classes, dtype=torch.int64)
 
         if self.return_masks:
@@ -119,7 +120,8 @@ def make_coco_transforms(image_set):
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+    # scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+    scales = [480 // 2, 512 // 2, 544 // 2, 576 // 2, 608 // 2, 640 // 2, 672 // 2, 704 // 2, 736 // 2, 768 // 2, 800 // 2]
 
     if image_set == 'train':
         return T.Compose([
@@ -128,7 +130,7 @@ def make_coco_transforms(image_set):
                 T.RandomResize(scales, max_size=1333),
                 T.Compose([
                     T.RandomResize([400, 500, 600]),
-                    T.RandomSizeCrop(384, 600),
+                    # T.RandomSizeCrop(384, 600),
                     T.RandomResize(scales, max_size=1333),
                 ])
             ),
@@ -137,7 +139,7 @@ def make_coco_transforms(image_set):
 
     if image_set == 'val':
         return T.Compose([
-            T.RandomResize([800], max_size=1333),
+            T.RandomResize([800 // 4], max_size=1333),
             normalize,
         ])
 

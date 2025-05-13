@@ -22,11 +22,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    metric_logger.add_meter('CUDA', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
+        # print(samples.tensors.shape)
+        
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         outputs = model(samples)
@@ -53,11 +56,25 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         losses.backward()
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+        # qkv_weights_before = model.backbone[0].body.encoder.blocks[0].attn.qkv
+        # for name, param in qkv_weights_before.named_parameters():
+        #     print(f"Parameter: {name}: {param[0].mean(), {param.requires_grad}}")
+        # for name, param in model.named_parameters():
+        #     if 'lora_A' in name and param.grad is not None:
+        #         print(f"{name} gradient mean: {param.grad.mean()}")
+        #     if 'lora_B' in name and param.grad is not None:
+        #         print(f"{name} gradient mean: {param.grad.mean()}")
         optimizer.step()
+        # print("AFTER")
+        # qkv_weights_before = model.module.backbone[0].body.encoder.blocks[0].attn.qkv
+        # for name, param in qkv_weights_before.named_parameters():
+        #     print(f"Parameter: {name}: {param[0]}")
+            # print(param[0])  # Prints the full tensor
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.update(CUDA=torch.cuda.max_memory_allocated(device=None) / (1024 * 1024 * 1024))
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
